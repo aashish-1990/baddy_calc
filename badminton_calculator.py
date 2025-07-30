@@ -1,10 +1,13 @@
 import streamlit as st
 import pandas as pd
+import qrcode
+from io import BytesIO
+from PIL import Image
 
 st.set_page_config(page_title="Badminton Price Sharing Calculator", layout="centered")
 
-st.title("🏸 Badminton Price Sharing Calculator")
-st.markdown("**Split court costs easily, fairly, and instantly after every session!**")
+st.title("🏸 Badminton Price Sharing Calculator + UPI Payment")
+st.markdown("**Split court costs instantly – pay and settle with UPI in one click!**")
 
 # --- Booking Inputs ---
 st.header("Court Booking Details")
@@ -20,10 +23,7 @@ st.header("Players & Playtime")
 num_players = st.number_input("Number of players", min_value=2, value=4)
 player_data = []
 
-booker_idx = st.radio("Who booked & paid in advance?", options=list(range(num_players)), format_func=lambda x: f"Player {x+1}")
-
-st.write("*Enter 0 for minutes if absent (absentees pay nothing).*")
-
+player_names = []
 for i in range(int(num_players)):
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -31,8 +31,11 @@ for i in range(int(num_players)):
     with col2:
         mins = st.number_input(f"Minutes played", min_value=0, max_value=int(session_duration_hr*60), value=int(session_duration_hr*60), key=f"mins_{i}")
     player_data.append({"name": name.strip(), "minutes_played": mins})
+    player_names.append(name.strip())
 
+booker_idx = st.radio("Who booked & paid in advance?", options=list(range(num_players)), format_func=lambda x: player_names[x])
 booker_name = player_data[booker_idx]['name']
+booker_upi_id = st.text_input("Booker's UPI ID (for payment links & QR)", value="aashish@ybl")
 
 # --- Calculation ---
 present_players = [p for p in player_data if p['minutes_played'] > 0]
@@ -60,12 +63,28 @@ else:
     st.dataframe(df, hide_index=True)
 
     st.markdown(f"**Booker ({booker_name}) paid ₹{total_cost:.2f} in advance.**")
-    pay_to_booker = df[df["To Pay (+)/Receive (-)"] > 0][["Player", "To Pay (+)/Receive (-)"]]
+    pay_to_booker = df[(df["Player"] != booker_name) & (df["To Pay (+)/Receive (-)"] > 0)][["Player", "To Pay (+)/Receive (-)"]]
     if not pay_to_booker.empty:
-        st.markdown("### Who Pays the Booker:")
+        st.markdown("### Who Pays the Booker (with UPI):")
         for _, row in pay_to_booker.iterrows():
-            st.write(f"- {row['Player']} pays ₹{row['To Pay (+)/Receive (-)']:.2f} to {booker_name}")
+            upi_amount = row['To Pay (+)/Receive (-)']
+            payee = booker_name.replace(" ", "%20")
+            upi_url = f"upi://pay?pa={booker_upi_id}&pn={payee}&am={upi_amount:.2f}&cu=INR"
+            st.markdown(f"#### {row['Player']} pays ₹{upi_amount:.2f} to {booker_name}")
+
+            # UPI Pay link
+            st.markdown(f"[Pay via UPI](<{upi_url}>)", unsafe_allow_html=True)
+
+            # QR Code generation
+            qr = qrcode.QRCode(box_size=6, border=2)
+            qr.add_data(upi_url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            st.image(buf.getvalue(), width=150, caption="Scan to pay (any UPI app)")
 
     st.markdown(f"*Total shares add up to: ₹{total_shares:.2f}*")
 
-st.caption("Created by Aashish Sharma | Powered by Streamlit")
+st.caption("Created by Aashish Sharma | Powered by Streamlit + UPI")
+
