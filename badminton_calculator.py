@@ -4,144 +4,175 @@ import pandas as pd
 st.set_page_config(page_title="Badminton Price Sharing Calculator", layout="centered")
 
 st.title("🏸 Badminton Price Sharing Calculator")
-st.markdown("**Split court booking costs fairly based on time played — with optional drinks cost.**")
+st.markdown(
+    "Split court booking costs fairly based on time played and include drinks/snacks, "
+    "with clear net balances and suggested settlements."
+)
 
 # --- Booking Inputs ---
 st.header("Court Booking Details")
 num_courts = st.number_input("Number of courts", min_value=1, value=1)
 session_duration_hr = st.number_input("Duration per court (in hours)", min_value=0.25, value=1.0, step=0.25)
-hourly_rate = st.number_input("Hourly rate per court (₹)", min_value=1, value=600)
+hourly_rate = st.number_input("Hourly rate per court (₹)", min_value=1.0, value=600.0, step=10.0)
 
-total_court_cost = num_courts * session_duration_hr * hourly_rate
+total_court_cost = round(num_courts * session_duration_hr * hourly_rate, 2)
 st.write(f"**Total court cost:** ₹{total_court_cost:.2f}")
 
-# --- Drinks / Extras ---
-st.header("Extras (Optional)")
-drinks_total = st.number_input("Total drinks/snacks cost (₹)", min_value=0.0, value=0.0, step=10.0)
-drinks_split_mode = st.selectbox(
-    "How to split drinks?",
-    ["Equally among present players", "Proportionally by minutes played"]
-)
-
 # --- Player Inputs ---
-st.header("Players & Playtime")
-num_players = st.number_input("Number of players", min_value=2, value=4)
-player_data = []
+st.header("Players, Playtime & Drinks")
+num_players = st.number_input("Number of players", min_value=2, value=4, step=1)
+
+player_rows = []
 player_names = []
 
 for i in range(int(num_players)):
-    col1, col2 = st.columns([2, 1])
-    with col1:
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
         name = st.text_input(f"Player {i+1} name", value=f"Player{i+1}", key=f"name_{i}").strip()
-    with col2:
+    with c2:
         mins = st.number_input(
             f"Minutes played",
             min_value=0,
             max_value=int(session_duration_hr * 60),
             value=int(session_duration_hr * 60),
+            step=5,
             key=f"mins_{i}",
         )
-    player_data.append({"name": name, "minutes_played": mins})
-    player_names.append(name)
+    with c3:
+        drinks_paid = st.number_input(
+            "Drinks paid (₹)",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+            key=f"drinks_{i}",
+        )
+    player_rows.append({"name": name or f"Player{i+1}", "minutes_played": mins, "drinks_paid": drinks_paid})
+    player_names.append(name or f"Player{i+1}")
 
 booker_idx = st.radio(
-    "Who booked & paid in advance?",
-    options=list(range(num_players)),
-    format_func=lambda x: player_names[x] if player_names[x] else f"Player{x+1}",
+    "Who booked & paid the court in advance?",
+    options=list(range(int(num_players))),
+    format_func=lambda idx: player_names[idx],
 )
-booker_name = player_data[booker_idx]["name"] or f"Player{booker_idx+1}"
+booker_name = player_names[booker_idx]
 
-# --- Calculation ---
-present_players = [p for p in player_data if p["minutes_played"] > 0]
+# --- Compute present players & totals ---
+present_players = [p for p in player_rows if p["minutes_played"] > 0]
 total_played_minutes = sum(p["minutes_played"] for p in present_players)
+total_drinks_paid = round(sum(p["drinks_paid"] for p in player_rows), 2)
 
 if total_played_minutes == 0:
     st.warning("No one played! Please enter valid minutes (> 0) for at least one player.")
 else:
-    # Base court shares: proportional by minutes
-    def court_share(p):
-        return total_court_cost * (p["minutes_played"] / total_played_minutes) if total_played_minutes > 0 else 0.0
+    # Drinks are shared equally among present players (not by minutes)
+    n_present = len(present_players)
+    drinks_share_each = round(total_drinks_paid / n_present, 2) if n_present > 0 else 0.0
 
-    # Drinks shares: either equal or proportional
-    if drinks_total > 0 and len(present_players) > 0:
-        if drinks_split_mode == "Equally among present players":
-            equal_drinks = drinks_total / len(present_players)
-            def drinks_share(p): return equal_drinks
-        else:  # Proportional by minutes
-            def drinks_share(p):
-                return drinks_total * (p["minutes_played"] / total_played_minutes) if total_played_minutes > 0 else 0.0
-    else:
-        def drinks_share(p): return 0.0
-
+    # Build per-player ledger
     rows = []
-    non_booker_settlements = []
-    for p in present_players:
-        cs = court_share(p)
-        ds = drinks_share(p)
-        total_share_unrounded = cs + ds
-        # Round per-player shares for display/payment
-        cs_r = round(cs, 2)
-        ds_r = round(ds, 2)
-        total_share = round(total_share_unrounded, 2)
+    for p in player_rows:
+        name = p["name"]
+        mins = p["minutes_played"]
+        played = mins > 0
 
-        row = {
-            "Player": p["name"],
-            "Minutes Played": p["minutes_played"],
-            "Court Share (₹)": cs_r,
-            "Drinks Share (₹)": ds_r,
-            "Total Share (₹)": total_share,
-        }
-        rows.append(row)
+        # Court share proportional to minutes among present players only
+        court_share = round(total_court_cost * (mins / total_played_minutes), 2) if played else 0.0
+
+        # Drinks share equal among present players only
+        drink_share = drinks_share_each if played else 0.0
+
+        total_owed = round(court_share + drink_share, 2)
+
+        # Contribution:
+        # - Booker contributes total court cost
+        # - Anyone may have contributed drinks (drinks_paid)
+        contributed = 0.0
+        if name == booker_name:
+            contributed += total_court_cost
+        contributed += p["drinks_paid"]
+        contributed = round(contributed, 2)
+
+        # Net balance = Contribution - Owed
+        # Positive => should receive; Negative => should pay
+        net = round(contributed - total_owed, 2)
+
+        rows.append(
+            {
+                "Player": name,
+                "Minutes Played": mins,
+                "Court Share (₹)": court_share,
+                "Drinks Paid (₹)": p["drinks_paid"],
+                "Drinks Share (₹)": drink_share,
+                "Total Owed (₹)": total_owed,
+                "Total Contributed (₹)": contributed,
+                "Net Balance (₹) (+receive / -pay)": net,
+            }
+        )
 
     df = pd.DataFrame(rows)
 
-    # Compute settlements to the booker:
-    # For non-bookers: they owe their Total Share
-    # For the booker: he should receive the sum of others (booker's settlement = negative of that)
-    # This ensures rounding reconciliation automatically.
-    total_cost_all = round(total_court_cost + drinks_total, 2)
-
-    # Build settlements
-    settlements = []
-    sum_non_bookers = 0.0
-    for _, r in df.iterrows():
-        if r["Player"] == booker_name:
-            continue
-        sum_non_bookers += r["Total Share (₹)"]
-    sum_non_bookers = round(sum_non_bookers, 2)
-
-    # Booker receives negative of others' sum
-    # If the booker is not in present players (edge case), we'll skip the negative line
-    for i, r in df.iterrows():
-        if r["Player"] == booker_name:
-            settlements.append(-sum_non_bookers)
-        else:
-            settlements.append(r["Total Share (₹)"])
-
-    df["To Pay (+)/Receive (-) vs Booker (₹)"] = settlements
-
-    st.subheader("Settlement Results")
+    # Display results
+    st.subheader("Settlement Summary")
     st.dataframe(df, hide_index=True, use_container_width=True)
 
-    # Summary
+    grand_total = round(total_court_cost + total_drinks_paid, 2)
     st.markdown(f"**Booker:** {booker_name}")
     st.markdown(f"**Total court cost:** ₹{total_court_cost:.2f}")
-    st.markdown(f"**Total drinks cost:** ₹{drinks_total:.2f}")
-    st.markdown(f"**Grand total (court + drinks): ₹{total_cost_all:.2f}**")
+    st.markdown(f"**Total drinks paid:** ₹{total_drinks_paid:.2f}")
+    st.markdown(f"**Grand total (court + drinks): ₹{grand_total:.2f}**")
 
-    # Who pays the booker
-    st.markdown("### Who Pays the Booker")
-    payers = df[(df["Player"] != booker_name) & (df["To Pay (+)/Receive (-) vs Booker (₹)"] > 0)][
-        ["Player", "To Pay (+)/Receive (-) vs Booker (₹)"]
-    ]
-    if payers.empty:
-        st.write("- No one owes the booker (check inputs).")
+    # Check that sums are sane
+    sum_owed = round(df["Total Owed (₹)"].sum(), 2)
+    sum_contrib = round(df["Total Contributed (₹)"].sum(), 2)
+    sum_net = round(df["Net Balance (₹) (+receive / -pay)"].sum(), 2)
+
+    st.markdown(
+        f"- Sum of owed: **₹{sum_owed:.2f}**  |  "
+        f"Sum of contributions: **₹{sum_contrib:.2f}**  |  "
+        f"Net balance total: **₹{sum_net:.2f}**"
+    )
+
+    # --- Suggested Settlements (who pays whom) ---
+    st.subheader("Suggested Settlements")
+    creditors = []  # (name, amount_to_receive)
+    debtors = []    # (name, amount_to_pay)
+
+    for _, r in df.iterrows():
+        net = r["Net Balance (₹) (+receive / -pay)"]
+        if net > 0.005:
+            creditors.append([r["Player"], float(net)])
+        elif net < -0.005:
+            debtors.append([r["Player"], float(-net)])  # store positive amount to pay
+
+    # Greedy settle
+    transfers = []
+    ci, di = 0, 0
+    while ci < len(creditors) and di < len(debtors):
+        c_name, c_amt = creditors[ci]
+        d_name, d_amt = debtors[di]
+        pay = round(min(c_amt, d_amt), 2)
+        if pay > 0:
+            transfers.append((d_name, c_name, pay))
+            creditors[ci][1] = round(c_amt - pay, 2)
+            debtors[di][1] = round(d_amt - pay, 2)
+        if creditors[ci][1] <= 0.005:
+            ci += 1
+        if debtors[di][1] <= 0.005:
+            di += 1
+
+    if not transfers:
+        st.write("- No transfers required (everyone is settled).")
     else:
-        for _, row in payers.iterrows():
-            st.write(f"- **{row['Player']}** pays **₹{row['To Pay (+)/Receive (-) vs Booker (₹)']:.2f}** to **{booker_name}**")
+        for payer, receiver, amt in transfers:
+            st.write(f"- **{payer}** pays **₹{amt:.2f}** to **{receiver}**")
 
     # Download CSV
     csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download settlement as CSV", data=csv, file_name="badminton_settlement.csv", mime="text/csv")
+    st.download_button(
+        "Download settlement as CSV",
+        data=csv,
+        file_name="badminton_settlement.csv",
+        mime="text/csv",
+    )
 
-st.caption("Created by Aashish Sharma | Streamlined for quick, fair settlements")
+st.caption("Created by Aashish Sharma | Fair splits for court + drinks")
