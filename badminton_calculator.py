@@ -6,10 +6,10 @@ st.set_page_config(page_title="Badminton Price Sharing Calculator", layout="cent
 st.title("🏸 Badminton Price Sharing Calculator")
 st.markdown(
     "Split **court costs** by time played and **drinks** equally among players who played. "
-    "One person pays for drinks; that amount is added to their contribution for settlement."
+    "One person (who played) pays for drinks; that amount is added to their contribution for settlement."
 )
 
-# --- Booking Inputs ---
+# --- Court Booking Details ---
 st.header("Court Booking Details")
 num_courts = st.number_input("Number of courts", min_value=1, value=1)
 session_duration_hr = st.number_input("Duration per court (in hours)", min_value=0.25, value=1.0, step=0.25)
@@ -18,7 +18,7 @@ hourly_rate = st.number_input("Hourly rate per court (₹)", min_value=1.0, valu
 total_court_cost = round(num_courts * session_duration_hr * hourly_rate, 2)
 st.write(f"**Total court cost:** ₹{total_court_cost:.2f}")
 
-# --- Player Inputs ---
+# --- Players & Minutes ---
 st.header("Players & Minutes Played")
 num_players = st.number_input("Number of players", min_value=2, value=4, step=1)
 
@@ -48,33 +48,40 @@ booker_idx = st.radio(
 )
 booker_name = player_names[booker_idx]
 
-# --- Drinks (single payer) ---
-st.header("Drinks / Snacks")
-drinks_total = st.number_input("Total drinks/snacks cost (₹)", min_value=0.0, value=0.0, step=10.0)
-drinks_payer_name = None
-if drinks_total > 0:
-    drinks_payer_idx = st.selectbox("Who paid for drinks?", options=list(range(int(num_players))), format_func=lambda idx: player_names[idx])
-    drinks_payer_name = player_names[drinks_payer_idx]
-
-# --- Compute present players & totals ---
+# --- Determine present players (must have played > 0 minutes) ---
 present_players = [p for p in player_rows if p["minutes_played"] > 0]
+present_names = [p["name"] for p in present_players]
 total_played_minutes = sum(p["minutes_played"] for p in present_players)
 n_present = len(present_players)
 
-if total_played_minutes == 0:
+if total_played_minutes == 0 or n_present == 0:
     st.warning("No one played! Please enter valid minutes (> 0) for at least one player.")
 else:
-    # Drinks are split equally among present players
-    drinks_share_each = round(drinks_total / n_present, 2) if (drinks_total > 0 and n_present > 0) else 0.0
+    # --- Drinks (single payer must be among present players) ---
+    st.header("Drinks / Snacks")
+    drinks_total = st.number_input("Total drinks/snacks cost (₹)", min_value=0.0, value=0.0, step=10.0)
+    drinks_payer_name = None
+    if drinks_total > 0:
+        if not present_names:
+            st.error("Drinks payer must be someone who played. Please enter minutes first.")
+        else:
+            drinks_payer_name = st.selectbox(
+                "Who paid for drinks? (must be among players who played)",
+                options=present_names,
+                index=0,
+            )
 
-    # Build per-player ledger
+    # Drinks are split equally among present players
+    drinks_share_each = round(drinks_total / n_present, 2) if drinks_total > 0 else 0.0
+
+    # --- Build per-player ledger ---
     rows = []
     for p in player_rows:
         name = p["name"]
         mins = p["minutes_played"]
         played = mins > 0
 
-        # Court share proportional by minutes among present players only
+        # Court share proportional by minutes among present players
         court_share = round(total_court_cost * (mins / total_played_minutes), 2) if played else 0.0
 
         # Drinks share equal among present players only
@@ -83,8 +90,8 @@ else:
         total_owed = round(court_share + drink_share, 2)
 
         # Contributions:
-        # - Booker contributes the court cost
-        # - Drinks payer contributes the drinks total
+        # - Booker contributes total court cost
+        # - Drinks payer (who must be present) contributes drinks_total
         contributed = 0.0
         if name == booker_name:
             contributed += total_court_cost
@@ -110,13 +117,13 @@ else:
 
     df = pd.DataFrame(rows)
 
-    # Display results
+    # --- Display results ---
     st.subheader("Settlement Summary")
     st.dataframe(df, hide_index=True, use_container_width=True)
 
     grand_total = round(total_court_cost + drinks_total, 2)
     st.markdown(f"**Booker:** {booker_name}")
-    if drinks_total > 0:
+    if drinks_total > 0 and drinks_payer_name:
         st.markdown(f"**Drinks paid by:** {drinks_payer_name}  |  **Total drinks:** ₹{drinks_total:.2f}")
     else:
         st.markdown("**Drinks:** ₹0.00")
@@ -175,4 +182,4 @@ else:
         mime="text/csv",
     )
 
-st.caption("Created by Aashish Sharma | Court split by minutes, drinks split equally, single drinks payer contribution")
+st.caption("Created by Aashish Sharma | Court split by minutes, drinks split equally, drinks payer must have played")
